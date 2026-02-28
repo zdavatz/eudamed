@@ -14,6 +14,16 @@
 
 namespace migel {
 
+// ------------------------------ Language detection ----------------------------
+
+enum class Lang { EN, DE, FR, IT, UNKNOWN };
+
+struct LangDetectResult {
+    Lang lang;
+    int  score;       // winning score
+    int  confidence;  // gap between winner and runner-up
+};
+
 struct MigelItem {
     std::string position_nr;
     std::string bezeichnung;
@@ -68,6 +78,60 @@ inline const std::unordered_set<std::string>& stop_words() {
         "ecarteur", "divaricatore", "retraktor",
     };
     return sw;
+}
+
+// ------------------------------ Language detection stop words -----------------
+
+inline const std::unordered_set<std::string>& lang_stop_de() {
+    static const std::unordered_set<std::string> s = {
+        "der", "die", "das", "den", "dem", "des",
+        "ein", "eine", "eines", "einem", "einen", "einer",
+        "und", "oder", "fuer", "mit", "von", "bei",
+        "auf", "nach", "ueber", "unter", "aus", "bis",
+        "zur", "zum", "ins", "vom", "ohne", "auch",
+        "sich", "noch", "wenn", "wird", "ist", "kann",
+        "sind", "werden", "wurde", "hat", "haben",
+        "nicht", "nur", "aber", "wie", "dieser", "diese",
+        "dieses", "welche", "zwischen", "durch",
+    };
+    return s;
+}
+
+inline const std::unordered_set<std::string>& lang_stop_fr() {
+    static const std::unordered_set<std::string> s = {
+        "le", "la", "les", "des", "du",
+        "et", "en", "un", "une", "pour", "avec",
+        "dans", "sur", "qui", "que", "est", "sont",
+        "pas", "par", "aux", "ou", "ce", "cette",
+        "ces", "mais", "plus", "tout", "tous",
+        "peut", "entre", "aussi", "comme", "sans",
+    };
+    return s;
+}
+
+inline const std::unordered_set<std::string>& lang_stop_it() {
+    static const std::unordered_set<std::string> s = {
+        "il", "lo", "gli", "di",
+        "del", "della", "dei", "delle", "dello",
+        "ed", "uno", "per", "con",
+        "che", "sono", "nel", "nella", "nei", "nelle",
+        "sul", "sulla", "sui", "sulle",
+        "questo", "questa", "questi", "queste",
+        "non", "dal", "dalla", "dai", "dalle",
+    };
+    return s;
+}
+
+inline const std::unordered_set<std::string>& lang_stop_en() {
+    static const std::unordered_set<std::string> s = {
+        "the", "and", "for", "with", "is", "are",
+        "has", "have", "this", "that", "from", "was",
+        "were", "been", "being", "which", "their",
+        "into", "than", "its", "can", "may",
+        "used", "intended", "designed", "device",
+        "shall", "should", "will", "must", "not",
+    };
+    return s;
 }
 
 // ------------------------------ Text utilities --------------------------------
@@ -155,6 +219,109 @@ inline std::vector<std::string> split_words(const std::string& text) {
     }
     if (!word.empty()) words.push_back(std::move(word));
     return words;
+}
+
+// ------------------------------ Language detection ----------------------------
+
+/// Detect the dominant language of a text string (EN, DE, FR, IT).
+/// Uses UTF-8 character features (accents/umlauts) + stop-word counting.
+/// Returns UNKNOWN only when foreign characters are detected (non-DE/FR/IT accents,
+/// non-Latin scripts). Short/ambiguous text with no indicators returns EN (safe default).
+/// Must be called on raw UTF-8 text (before normalize_german).
+inline LangDetectResult detect_language(const std::string& text) {
+    // Step 1: Count character features on raw UTF-8 bytes
+    int char_de = 0, char_fr = 0, char_it = 0;
+    int char_foreign = 0; // accents/chars outside DE/FR/IT
+    for (size_t i = 0; i < text.size(); ++i) {
+        unsigned char c = static_cast<unsigned char>(text[i]);
+        if (c == 0xC3 && i + 1 < text.size()) {
+            unsigned char c2 = static_cast<unsigned char>(text[i + 1]);
+            bool known = false;
+            switch (c2) {
+                // Exclusively DE: ä ö ü ß Ä Ö Ü
+                case 0xA4: case 0xB6: case 0xBC: case 0x9F:
+                case 0x84: case 0x96: case 0x9C:
+                    char_de++; known = true; break;
+                // Exclusively FR: é ê ë ç â û î ô
+                case 0xA9: case 0xAA: case 0xAB: case 0xA7:
+                case 0xA2: case 0xBB: case 0xAE: case 0xB4:
+                    char_fr++; known = true; break;
+                // Exclusively IT: ì ò
+                case 0xAC: case 0xB2:
+                    char_it++; known = true; break;
+                // Shared FR+IT: à è ù
+                case 0xA0: char_fr++; char_it++; known = true; break;
+                case 0xA8: char_fr++; char_it++; known = true; break;
+                case 0xB9: char_fr++; char_it++; known = true; break;
+            }
+            if (!known) char_foreign++; // e.g. ñ, ý, ø, ā, etc.
+            i++;
+        }
+        // œ (C5 93) — exclusively FR
+        else if (c == 0xC5 && i + 1 < text.size()) {
+            if (static_cast<unsigned char>(text[i + 1]) == 0x93)
+                char_fr++;
+            else
+                char_foreign++; // e.g. ī, ş, ő, etc. (C5 xx range)
+            i++;
+        }
+        // Other multi-byte UTF-8: C4 xx (ą,ć,č,ď,ē,ě,ğ,ī,ł,ń,ň,ő,ř,ś,ş,š,ţ,ů,ź,ż,ž...)
+        // C6-C7 range, or 3/4-byte sequences (Cyrillic, Greek, CJK, Arabic, etc.)
+        else if (c >= 0xC4 && c <= 0xDF && i + 1 < text.size()) {
+            if (c != 0xC5) char_foreign++; // C5 handled above
+            i++;
+        }
+        else if (c >= 0xE0 && c <= 0xEF && i + 2 < text.size()) {
+            char_foreign++; // 3-byte: Cyrillic, Greek, CJK, Arabic, etc.
+            i += 2;
+        }
+        else if (c >= 0xF0 && c <= 0xF7 && i + 3 < text.size()) {
+            char_foreign++; // 4-byte: emoji, rare scripts
+            i += 3;
+        }
+    }
+
+    // Step 2: Count stop-word hits (on normalized+lowered text)
+    std::string lower = to_lower(normalize_german(text));
+    auto words = split_words(lower);
+
+    int stop_de = 0, stop_fr = 0, stop_it = 0, stop_en = 0;
+    const auto& de_sw = lang_stop_de();
+    const auto& fr_sw = lang_stop_fr();
+    const auto& it_sw = lang_stop_it();
+    const auto& en_sw = lang_stop_en();
+
+    for (const auto& w : words) {
+        if (de_sw.count(w)) stop_de++;
+        if (fr_sw.count(w)) stop_fr++;
+        if (it_sw.count(w)) stop_it++;
+        if (en_sw.count(w)) stop_en++;
+    }
+
+    // Step 3: Combine (character features weighted 2x — stronger signal)
+    int score_de = stop_de + char_de * 2;
+    int score_fr = stop_fr + char_fr * 2;
+    int score_it = stop_it + char_it * 2;
+    int score_en = stop_en;
+    int known_total = score_de + score_fr + score_it + score_en;
+
+    // Step 4: If foreign characters dominate over known language indicators → UNKNOWN
+    if (char_foreign >= 2 && char_foreign > (char_de + char_fr + char_it) && known_total < 3) {
+        return {Lang::UNKNOWN, 0, 0};
+    }
+
+    // Step 5: Find winner (default to EN for short/ambiguous text)
+    struct LS { Lang lang; int score; };
+    LS scores[4] = {
+        {Lang::DE, score_de}, {Lang::FR, score_fr},
+        {Lang::IT, score_it}, {Lang::EN, score_en},
+    };
+    std::sort(scores, scores + 4,
+              [](const LS& a, const LS& b) { return a.score > b.score; });
+
+    if (known_total < 1) return {Lang::EN, 0, 0}; // no indicators → assume EN
+
+    return {scores[0].lang, scores[0].score, scores[0].score - scores[1].score};
 }
 
 /// Shared keyword extraction logic.

@@ -378,6 +378,7 @@ int main(int argc, char* argv[]) {
     std::vector<std::vector<MatchResult>> thread_results(num_threads);
     std::atomic<size_t> processed{0};
     std::atomic<size_t> skipped_empty{0};
+    std::atomic<size_t> skipped_lang{0};
 
     auto worker = [&](unsigned int tid, size_t start, size_t end) {
         auto& results = thread_results[tid];
@@ -398,16 +399,58 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
-            // Combine all available text fields for richer matching
-            std::string combined = trade_name;
-            if (!description.empty()) combined += " " + description;
-            if (!cnd_desc.empty()) combined += " " + cnd_desc;
+            // Per-field language detection and routing
+            // UNKNOWN = unsupported language (Latvian, Polish, etc.) → skip field
+            std::string desc_de, desc_fr, desc_it;
 
-            // Expand English medical terms to DE/FR/IT equivalents for better matching
-            std::string expanded = expand_english_terms(combined);
+            auto route_field = [&](const std::string& field) {
+                if (field.empty()) return;
+                auto det = migel::detect_language(field);
+                switch (det.lang) {
+                    case migel::Lang::DE:
+                        if (!desc_de.empty()) desc_de += " ";
+                        desc_de += field;
+                        break;
+                    case migel::Lang::FR:
+                        if (!desc_fr.empty()) desc_fr += " ";
+                        desc_fr += field;
+                        break;
+                    case migel::Lang::IT:
+                        if (!desc_it.empty()) desc_it += " ";
+                        desc_it += field;
+                        break;
+                    case migel::Lang::EN: {
+                        // EN: expand to DE/FR/IT and add to all three channels
+                        std::string expanded = expand_english_terms(field);
+                        if (!desc_de.empty()) desc_de += " ";
+                        desc_de += expanded;
+                        if (!desc_fr.empty()) desc_fr += " ";
+                        desc_fr += expanded;
+                        if (!desc_it.empty()) desc_it += " ";
+                        desc_it += expanded;
+                        break;
+                    }
+                    case migel::Lang::UNKNOWN:
+                        // Unsupported language — skip this field
+                        break;
+                }
+            };
+
+            route_field(trade_name);
+            route_field(description);
+            route_field(cnd_desc);
+
+            // Skip device if no supported-language text remains
+            if (desc_de.empty() && desc_fr.empty() && desc_it.empty()) {
+                skipped_lang.fetch_add(1, std::memory_order_relaxed);
+                size_t p = processed.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (p % 200000 == 0)
+                    std::cout << "   Processed: " << p << " / " << device_vec.size() << "\n" << std::flush;
+                continue;
+            }
 
             const migel::MigelItem* match = migel::find_best_migel_match(
-                expanded, expanded, expanded, mfr_name,
+                desc_de, desc_fr, desc_it, mfr_name,
                 migel_items, keyword_index);
 
             if (match) {
@@ -449,6 +492,7 @@ int main(int argc, char* argv[]) {
     std::cout << "\nMatching complete:\n"
               << "   Total devices: " << device_vec.size() << "\n"
               << "   Skipped (no text fields): " << skipped_empty.load() << "\n"
+              << "   Skipped (unsupported language): " << skipped_lang.load() << "\n"
               << "   Matched to MiGeL: " << all_matches.size() << "\n";
 
     // Step 6: Write output database

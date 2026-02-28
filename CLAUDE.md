@@ -30,8 +30,8 @@ No build needed. Require: `bash`, `curl`, `jq`, `sqlite3`.
 | `download_devices` | Bash+jq | Unified device downloader & converter (`--full`, `--sample`, `--pages N`, `--csv-sample`, `--to-csv [N\|all]`) |
 | `cpp/eudamed2sqlite.cpp` | C++ | Import CSV into SQLite database (RFC 4180-compliant parser) |
 | `cpp/json2csv.cpp` | C++ | Multi-threaded JSON files → CSV+SQLite converter (uses nlohmann json.hpp) |
-| `cpp/eudamed_migel.cpp` | C++ | Multi-threaded EUDAMED↔MiGeL matcher: merges two DBs (case-insensitive dedup by UUID), matches on tradeName+Description+CND_Description, English→DE/FR/IT term expansion |
-| `cpp/migel.hpp` | C++ | Header-only MiGeL CSV parser & keyword matcher: inverted index, fuzzy/suffix matching, per-language scoring |
+| `cpp/eudamed_migel.cpp` | C++ | Multi-threaded EUDAMED↔MiGeL matcher: merges two DBs (case-insensitive dedup by UUID), per-field language detection (EN/DE/FR/IT), language-routed matching, skips unsupported languages |
+| `cpp/migel.hpp` | C++ | Header-only MiGeL CSV parser, keyword matcher (inverted index, fuzzy/suffix, per-language scoring), and language detector (stop-words + UTF-8 character features) |
 | `authorized_representatives/` | Rust | Convert downloaded actor JSON to CSV (`json-to-csv <input.json> [output.csv]`), adds UTF-8 BOM for Excel |
 | `download` | Bash | Unified downloader for actor data (`--importer`, `--manufacturer`, `--ar`) — auto-detects page count |
 
