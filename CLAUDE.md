@@ -30,7 +30,7 @@ No build needed. Require: `bash`, `curl`, `jq`, `sqlite3`.
 | `download_devices` | Bash+jq | Unified device downloader & converter (`--full`, `--sample`, `--pages N`, `--csv-sample`, `--to-csv [N\|all]`) |
 | `cpp/eudamed2sqlite.cpp` | C++ | Import CSV into SQLite database (RFC 4180-compliant parser) |
 | `cpp/json2csv.cpp` | C++ | Multi-threaded JSON files → CSV+SQLite converter (uses nlohmann json.hpp) |
-| `cpp/eudamed_migel.cpp` | C++ | Multi-threaded EUDAMED↔MiGeL matcher: merges two DBs (dedup by UUID), English→DE/FR/IT term expansion |
+| `cpp/eudamed_migel.cpp` | C++ | Multi-threaded EUDAMED↔MiGeL matcher: merges two DBs (case-insensitive dedup by UUID), matches on tradeName+Description+CND_Description, English→DE/FR/IT term expansion |
 | `cpp/migel.hpp` | C++ | Header-only MiGeL CSV parser & keyword matcher: inverted index, fuzzy/suffix matching, per-language scoring |
 | `authorized_representatives/` | Rust | Convert downloaded actor JSON to CSV (`json-to-csv <input.json> [output.csv]`), adds UTF-8 BOM for Excel |
 | `download` | Bash | Unified downloader for actor data (`--importer`, `--manufacturer`, `--ar`) — auto-detects page count |

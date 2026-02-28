@@ -47,7 +47,7 @@ find json/ -name '*.json' | ./json2csv -o output.csv+db -
 
 - **eudamed2sqlite.cpp** — imports CSV into SQLite (RFC 4180-compliant parser)
 - **json2csv.cpp** — multi-threaded converter from individual JSON device files to CSV and/or SQLite (uses nlohmann `json.hpp`)
-- **eudamed_migel.cpp** — multi-threaded matcher: merges two EUDAMED SQLite DBs (dedup by UUID), matches device tradeNames against Swiss MiGeL codes using English→DE/FR/IT term expansion, outputs only matched products
+- **eudamed_migel.cpp** — multi-threaded matcher: merges two EUDAMED SQLite DBs (case-insensitive dedup by UUID), matches devices against Swiss MiGeL codes using tradeName + Description + CND_Description fields with English→DE/FR/IT term expansion, outputs only matched products
 - **migel.hpp** — header-only MiGeL CSV parser and keyword matcher with inverted index, fuzzy/suffix matching, and per-language scoring (no external dependencies)
 
 ```bash

@@ -220,7 +220,7 @@ static size_t read_db_rows(
     const std::string& db_path,
     const std::vector<std::string>& unified_cols,
     std::unordered_map<std::string, Row>& rows,
-    size_t uuid_col_idx)
+    const std::vector<size_t>& uuid_col_indices)
 {
     sqlite3* db = nullptr;
     if (sqlite3_open_v2(db_path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
@@ -230,13 +230,14 @@ static size_t read_db_rows(
 
     auto db_cols = read_columns(db, "devices");
 
+    // Case-insensitive mapping from DB columns to unified columns
     std::unordered_map<std::string, size_t> unified_map;
     for (size_t i = 0; i < unified_cols.size(); ++i)
-        unified_map[unified_cols[i]] = i;
+        unified_map[migel::to_lower(unified_cols[i])] = i;
 
     std::vector<int> col_mapping(db_cols.size(), -1);
     for (size_t i = 0; i < db_cols.size(); ++i) {
-        auto it = unified_map.find(db_cols[i]);
+        auto it = unified_map.find(migel::to_lower(db_cols[i]));
         if (it != unified_map.end())
             col_mapping[i] = static_cast<int>(it->second);
     }
@@ -259,7 +260,13 @@ static size_t read_db_rows(
             if (val) row[col_mapping[i]] = val;
         }
 
-        std::string uuid = row[uuid_col_idx];
+        std::string uuid;
+        for (size_t idx : uuid_col_indices) {
+            if (idx < row.size() && !row[idx].empty()) {
+                uuid = row[idx];
+                break;
+            }
+        }
         if (uuid.empty()) uuid = "__no_uuid_" + std::to_string(count);
 
         auto it = rows.find(uuid);
@@ -310,37 +317,48 @@ int main(int argc, char* argv[]) {
     sqlite3_close(tmp_db1);
     sqlite3_close(tmp_db2);
 
+    // Case-insensitive column unification (e.g., UUID/uuid, TradeName/tradeName)
     std::vector<std::string> unified_cols = cols1;
-    std::unordered_set<std::string> col_set(cols1.begin(), cols1.end());
+    std::unordered_set<std::string> col_set_lower;
+    for (const auto& c : cols1) col_set_lower.insert(migel::to_lower(c));
     for (const auto& c : cols2) {
-        if (col_set.find(c) == col_set.end()) {
+        if (col_set_lower.find(migel::to_lower(c)) == col_set_lower.end()) {
             unified_cols.push_back(c);
-            col_set.insert(c);
+            col_set_lower.insert(migel::to_lower(c));
         }
     }
 
     std::cout << "   Unified columns: " << unified_cols.size()
               << " (db1: " << cols1.size() << ", db2: " << cols2.size() << ")\n";
 
-    size_t uuid_idx = 0;
+    // Find column indices (case-insensitive)
+    size_t uuid_idx = SIZE_MAX;
     size_t tradeName_idx = SIZE_MAX;
+    size_t description_idx = SIZE_MAX;
+    size_t cnd_description_idx = SIZE_MAX;
     size_t mfr_idx = SIZE_MAX;
     for (size_t i = 0; i < unified_cols.size(); ++i) {
-        if (unified_cols[i] == "uuid") uuid_idx = i;
-        if (unified_cols[i] == "tradeName") tradeName_idx = i;
-        if (unified_cols[i] == "manufacturerName") mfr_idx = i;
+        std::string lower = migel::to_lower(unified_cols[i]);
+        if (lower == "uuid") uuid_idx = i;
+        else if (lower == "tradename") tradeName_idx = i;
+        else if (lower == "description") description_idx = i;
+        else if (lower == "cnd_description") cnd_description_idx = i;
+        else if (lower == "manufacturername") mfr_idx = i;
     }
 
     // Step 3: Read and merge rows from both DBs
+    std::vector<size_t> uuid_indices;
+    if (uuid_idx != SIZE_MAX) uuid_indices.push_back(uuid_idx);
+
     std::unordered_map<std::string, Row> all_rows;
     all_rows.reserve(1000000);
 
     std::cout << "Reading " << args.db1 << " ...\n";
-    size_t count1 = read_db_rows(args.db1, unified_cols, all_rows, uuid_idx);
+    size_t count1 = read_db_rows(args.db1, unified_cols, all_rows, uuid_indices);
     std::cout << "   " << count1 << " rows read, " << all_rows.size() << " unique.\n";
 
     std::cout << "Reading " << args.db2 << " ...\n";
-    size_t count2 = read_db_rows(args.db2, unified_cols, all_rows, uuid_idx);
+    size_t count2 = read_db_rows(args.db2, unified_cols, all_rows, uuid_indices);
     std::cout << "   " << count2 << " rows read, " << all_rows.size() << " unique after merge.\n";
 
     // Step 4: Flatten to vector for parallel processing
@@ -365,10 +383,14 @@ int main(int argc, char* argv[]) {
         auto& results = thread_results[tid];
         for (size_t i = start; i < end; ++i) {
             auto& [uuid, row] = device_vec[i];
+
             std::string trade_name = (tradeName_idx < row.size()) ? row[tradeName_idx] : "";
+
+            std::string description = (description_idx < row.size()) ? row[description_idx] : "";
+            std::string cnd_desc = (cnd_description_idx < row.size()) ? row[cnd_description_idx] : "";
             std::string mfr_name = (mfr_idx < row.size()) ? row[mfr_idx] : "";
 
-            if (trade_name.empty()) {
+            if (trade_name.empty() && description.empty() && cnd_desc.empty()) {
                 skipped_empty.fetch_add(1, std::memory_order_relaxed);
                 size_t p = processed.fetch_add(1, std::memory_order_relaxed) + 1;
                 if (p % 200000 == 0)
@@ -376,8 +398,13 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
+            // Combine all available text fields for richer matching
+            std::string combined = trade_name;
+            if (!description.empty()) combined += " " + description;
+            if (!cnd_desc.empty()) combined += " " + cnd_desc;
+
             // Expand English medical terms to DE/FR/IT equivalents for better matching
-            std::string expanded = expand_english_terms(trade_name);
+            std::string expanded = expand_english_terms(combined);
 
             const migel::MigelItem* match = migel::find_best_migel_match(
                 expanded, expanded, expanded, mfr_name,
@@ -421,7 +448,7 @@ int main(int argc, char* argv[]) {
 
     std::cout << "\nMatching complete:\n"
               << "   Total devices: " << device_vec.size() << "\n"
-              << "   Skipped (empty tradeName): " << skipped_empty.load() << "\n"
+              << "   Skipped (no text fields): " << skipped_empty.load() << "\n"
               << "   Matched to MiGeL: " << all_matches.size() << "\n";
 
     // Step 6: Write output database
