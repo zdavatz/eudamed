@@ -71,7 +71,6 @@ inline const std::unordered_set<std::string>& stop_words() {
         "material", "produkt", "products", "product", "medical", "device",
         "system", "systeme", "systems", "geraet", "geraete", "appareil",
         // Cross-type medical terms
-        "compression", "compressione", "kompression",
         "verlaengerung", "extension", "estensione", "prolongation",
         "silikon", "silicone",
         // Generic surgical instrument terms
