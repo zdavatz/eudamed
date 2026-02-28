@@ -32,14 +32,20 @@ Auto-detects total pages from the API. Data is saved as paginated JSON files and
 ./download_devices --to-csv 5000   # Convert first 5000 records
 ```
 
-### eudamed2sqlite — CSV to SQLite
+### cpp/ — C++ Tools
 
 ```bash
-g++ eudamed2sqlite.cpp -lsqlite3 -o eudamed2sqlite
+# CSV to SQLite importer
+g++ cpp/eudamed2sqlite.cpp -lsqlite3 -o eudamed2sqlite
 ./eudamed2sqlite
+
+# Multi-threaded JSON files to CSV+SQLite converter
+g++ -std=c++20 -O2 -pthread cpp/json2csv.cpp -lsqlite3 -o json2csv
+find json/ -name '*.json' | ./json2csv -o output.csv+db -
 ```
 
-Imports CSV data into a SQLite database. RFC 4180-compliant CSV parser with multi-line quoted field support.
+- **eudamed2sqlite.cpp** — imports CSV into SQLite (RFC 4180-compliant parser)
+- **json2csv.cpp** — multi-threaded converter from individual JSON device files to CSV and/or SQLite (uses nlohmann `json.hpp`)
 
 ### authorized_representatives/ — JSON to CSV (Rust)
 

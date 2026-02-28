@@ -13,9 +13,10 @@ ETL toolkit for extracting, transforming, and loading data from the European Uni
 cd authorized_representatives && cargo build --release
 ```
 
-### C++ (eudamed2sqlite)
+### C++ (cpp/)
 ```bash
-g++ eudamed2sqlite.cpp -lsqlite3 -o eudamed2sqlite
+g++ cpp/eudamed2sqlite.cpp -lsqlite3 -o eudamed2sqlite
+g++ -std=c++20 -O2 -pthread cpp/json2csv.cpp -lsqlite3 -o json2csv
 ```
 
 ### Bash scripts
@@ -26,7 +27,8 @@ No build needed. Require: `bash`, `curl`, `jq`, `sqlite3`.
 | Tool | Language | Purpose |
 |------|----------|---------|
 | `download_devices` | Bash+jq | Unified device downloader & converter (`--full`, `--sample`, `--pages N`, `--csv-sample`, `--to-csv [N\|all]`) |
-| `eudamed2sqlite` | C++ | Import CSV into SQLite database (RFC 4180-compliant parser) |
+| `cpp/eudamed2sqlite.cpp` | C++ | Import CSV into SQLite database (RFC 4180-compliant parser) |
+| `cpp/json2csv.cpp` | C++ | Multi-threaded JSON files → CSV+SQLite converter (uses nlohmann json.hpp) |
 | `authorized_representatives/` | Rust | Convert downloaded actor JSON to CSV (`json-to-csv <input.json> [output.csv]`), adds UTF-8 BOM for Excel |
 | `download` | Bash | Unified downloader for actor data (`--importer`, `--manufacturer`, `--ar`) — auto-detects page count |
 
