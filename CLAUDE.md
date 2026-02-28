@@ -17,6 +17,7 @@ cd authorized_representatives && cargo build --release
 ```bash
 g++ cpp/eudamed2sqlite.cpp -lsqlite3 -o eudamed2sqlite
 g++ -std=c++20 -O2 -pthread cpp/json2csv.cpp -lsqlite3 -o json2csv
+g++ -std=c++20 -O2 cpp/eudamed_migel.cpp -lsqlite3 -lOpenXLSX -o eudamed_migel
 ```
 
 ### Bash scripts
@@ -29,6 +30,8 @@ No build needed. Require: `bash`, `curl`, `jq`, `sqlite3`.
 | `download_devices` | Bash+jq | Unified device downloader & converter (`--full`, `--sample`, `--pages N`, `--csv-sample`, `--to-csv [N\|all]`) |
 | `cpp/eudamed2sqlite.cpp` | C++ | Import CSV into SQLite database (RFC 4180-compliant parser) |
 | `cpp/json2csv.cpp` | C++ | Multi-threaded JSON files → CSV+SQLite converter (uses nlohmann json.hpp) |
+| `cpp/eudamed_migel.cpp` | C++ | Match EUDAMED devices against Swiss MiGeL codes (uses migel.hpp, OpenXLSX) |
+| `cpp/migel.hpp` | C++ | Header-only MiGeL XLSX parser & keyword matcher |
 | `authorized_representatives/` | Rust | Convert downloaded actor JSON to CSV (`json-to-csv <input.json> [output.csv]`), adds UTF-8 BOM for Excel |
 | `download` | Bash | Unified downloader for actor data (`--importer`, `--manufacturer`, `--ar`) — auto-detects page count |
 

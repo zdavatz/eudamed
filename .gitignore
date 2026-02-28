@@ -9,8 +9,13 @@ eudamed_json_output/
 **/page_*.json
 **/merged.json
 
+# XLSX data files
+xlsx/*.xlsx
+
 # Compiled binaries
 eudamed2sqlite
+eudamed_migel
+json2csv
 authorized_representatives/target/
 
 # Empty output dirs (recreated by scripts)
