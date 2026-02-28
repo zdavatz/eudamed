@@ -109,9 +109,12 @@ static const std::unordered_map<std::string, std::string>& english_medical_terms
         {"blood pressure", "blutdruckmessgeraet tensiometre misuratore"},
         // Suction
         {"suction", "absaugung aspiration aspirazione"},
-        // Bed & mattress
+        // Bed & mattress & anti-decubitus
         {"mattress", "matratze matelas materasso"},
         {"bed", "bett lit letto"},
+        {"decubitus", "dekubitus antidekubitus matratze escarre materasso antidecubito"},
+        {"anti-decubitus", "dekubitus antidekubitus matratze escarre materasso antidecubito"},
+        {"pressure ulcer", "dekubitus escarre piaga decubito"},
         // Gloves
         {"glove", "handschuh gant guanto"},
         {"gloves", "handschuhe gants guanti"},
