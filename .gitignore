@@ -1,0 +1,23 @@
+# Data files (large, downloaded/generated)
+*.ndjson
+*.db
+*.csv
+json/
+eudamed_json_output/
+
+# Downloaded page data
+**/page_*.json
+**/merged.json
+
+# Compiled binaries
+eudamed2sqlite
+authorized_representatives/target/
+
+# Empty output dirs (recreated by scripts)
+eudamed_importer/
+eudamed_manufacturer/
+eudamed_authorised_reps/
+
+# Editor/IDE
+.claude/
+*.json.pretty

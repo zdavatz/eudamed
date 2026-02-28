@@ -1,0 +1,318 @@
+#!/bin/bash
+# =============================================================================
+# Unified EUDAMED UDI/DI device downloader & converter
+# =============================================================================
+set -euo pipefail
+
+BASE_URL="https://ec.europa.eu/tools/eudamed/api/devices/udiDiData"
+USER_AGENT="Mozilla/5.0 (compatible; EUDAMED-downloader/3.0)"
+
+# ----------------------------- Help -------------------------------------------
+show_help() {
+    cat <<EOF
+Usage: $(basename "$0") <option>
+
+Options:
+  --full              Download entire dataset as resumable NDJSON
+  --sample            Download first 100 records as pretty JSON
+  --pages N           Download first N pages (~20 records each) as NDJSON
+  --csv-sample        Download first 100 records directly to CSV
+  --to-csv [N|all]    Convert local NDJSON to CSV with EUDAMED URLs
+                      (default: 10000, use 'all' for entire file)
+  -h, --help          Show this help
+
+Examples:
+  $(basename "$0") --full
+  $(basename "$0") --sample
+  $(basename "$0") --pages 50
+  $(basename "$0") --csv-sample
+  $(basename "$0") --to-csv all
+  $(basename "$0") --to-csv 5000
+EOF
+    exit 0
+}
+
+# ----------------------------- Sample mode (first 100 as JSON) ----------------
+download_sample() {
+    local output="eudamed_sample_100.json"
+    local max_records=100
+    local page=1
+    local collected=0
+
+    echo "Downloading first $max_records records only → $output"
+    echo "[" > "$output"
+
+    while (( collected < max_records )); do
+        echo "Fetching page $page..."
+        local temp=$(mktemp)
+        if ! curl -fsSL "$BASE_URL?page=$page" -A "$USER_AGENT" -o "$temp"; then
+            echo "Failed to download page $page"
+            rm -f "$temp"
+            exit 1
+        fi
+
+        local records_in_page=$(jq -r '.content | length' "$temp")
+        [[ $records_in_page -eq 0 ]] && { echo "No more data"; break; }
+
+        if (( collected > 0 )); then
+            jq -c '.content[]' "$temp" | sed '2,$ s/^/,/' | tee -a "$output" >/dev/null
+        else
+            jq -c '.content[]' "$temp" | tee -a "$output" >/dev/null
+        fi
+
+        collected=$(( collected + records_in_page ))
+        rm -f "$temp"
+        ((page++))
+        sleep 0.5
+    done
+
+    echo "]" >> "$output"
+    jq . "$output" > "${output}.tmp" && mv "${output}.tmp" "$output"
+
+    echo "Done! → $output ($(jq length "$output") records, $(du -h "$output" | cut -f1))"
+}
+
+# ----------------------------- Pages mode -------------------------------------
+download_pages() {
+    local n="$1"
+    local output="eudamed_first_${n}_pages.ndjson"
+
+    echo "Downloading first $n pages (~$((n * 20)) records) → $output"
+    : > "$output"
+
+    for ((p=1; p<=n; p++)); do
+        echo "Page $p/$n"
+        curl -fsSL "$BASE_URL?page=$p" -A "$USER_AGENT" \
+            | jq -c '.content[]' >> "$output"
+        sleep 0.5
+    done
+
+    echo "Done! → $output ($(wc -l < "$output") records)"
+}
+
+# ----------------------------- Full resumable mode ----------------------------
+download_full() {
+    local output="eudamed_udi_di_full.ndjson"
+    local lockfile="${output}.lock"
+    local last_page_file="${output}.lastpage"
+
+    if ! mkdir "$lockfile" 2>/dev/null; then
+        echo "Another instance is already running (lockfile $lockfile exists)"
+        exit 1
+    fi
+
+    if [[ -f "$last_page_file" ]]; then
+        start_page=$(cat "$last_page_file")
+        echo "Resuming from page $start_page → $output"
+    else
+        start_page=1
+        : > "$output"
+        echo "Starting fresh download → $output"
+    fi
+
+    page=$start_page
+    while :; do
+        echo "Fetching page $page..."
+
+        if ! curl -fsSL "$BASE_URL?page=$page" -A "$USER_AGENT" | jq -c '.content[]'; then
+            echo "Failed to download page $page – stopping."
+            break
+        fi | tee -a "$output"
+
+        if ! curl -fsSL "$BASE_URL?page=$page" -A "$USER_AGENT" | jq -e '.content | length == 0' >/dev/null; then
+            echo "$page" > "$last_page_file"
+            ((page++))
+            sleep 0.5
+        else
+            echo "Empty page $page → end of data reached."
+            rm -f "$last_page_file"
+            break
+        fi
+    done
+
+    rm -rf "$lockfile"
+    echo "Full download finished!"
+    echo "File: $output  ($(wc -l < "$output") records, $(du -h "$output" | cut -f1))"
+}
+
+# ----------------------------- CSV sample (direct download to CSV) ------------
+json_to_csv_no_regex() {
+    jq -r '
+        def simplify_risk:
+            if .riskClass and .riskClass.code then
+                .riskClass.code
+                | split(".")[-1]
+                | ltrimstr("class-")
+                | ascii_upcase
+            else "" end;
+
+        def simplify_status:
+            if .deviceStatusType and .deviceStatusType.code then
+                .deviceStatusType.code
+                | split(".")[-1]
+                | split("-")
+                | map(ascii_upcase)
+                | join(" ")
+            else "" end;
+
+        [
+            .basicUdi // "",
+            .primaryDi // "",
+            .tradeName // "",
+            .manufacturerName // "",
+            .manufacturerSrn // "",
+            simplify_risk,
+            simplify_status,
+            .authorisedRepresentativeName // "",
+            .authorisedRepresentativeSrn // "",
+            .reference // "",
+            .issuingAgency // "",
+            .sterile // ""
+        ] | @csv
+    '
+}
+
+download_csv_sample() {
+    local csv_header='basicUdi,primaryDi,tradeName,manufacturerName,manufacturerSrn,riskClass,deviceStatus,authorisedRepresentativeName,authorisedRepresentativeSrn,reference,issuingAgency,sterile'
+    local output="eudamed_sample_100.csv"
+
+    echo "$csv_header" > "$output"
+
+    for p in 1 2 3 4 5; do
+        echo "    → Page $p ..."
+        local tmp=$(mktemp)
+        curl -fsSL "${BASE_URL}?page=${p}" -A "$USER_AGENT" -o "$tmp" > /dev/null 2>&1
+        jq -c '.content[]' "$tmp" 2>/dev/null | json_to_csv_no_regex >> "$output" || true
+        rm -f "$tmp"
+        sleep 0.5
+    done
+
+    echo "Success! First 100 records saved to:"
+    echo "  $output"
+    echo "  $(wc -l < "$output") lines total (incl. header)"
+}
+
+# ----------------------------- NDJSON → CSV with URLs -------------------------
+convert_to_csv() {
+    local input_file="eudamed_udi_di_full.ndjson"
+    local portal_url="https://ec.europa.eu/tools/eudamed/#/screen/search-device/"
+    local lines="$1"
+    local output_file
+
+    if [[ "$lines" == "all" ]]; then
+        lines=999999999
+        output_file="eudamed_full_with_urls.csv"
+        echo "Processing the ENTIRE file..."
+    elif [[ "$lines" =~ ^[0-9]+$ ]]; then
+        output_file="eudamed_first_${lines}_with_urls.csv"
+        echo "Processing first $lines records..."
+    else
+        echo "Error: invalid argument '$lines' (use a number or 'all')"
+        exit 1
+    fi
+
+    if [[ ! -f "$input_file" ]]; then
+        echo "Error: Input file '$input_file' not found in current directory!"
+        exit 1
+    fi
+
+    # Write header
+    printf '%s\n' \
+"basicUdi,primaryDi,uuid,ulid,basicUdiDiDataUlid,riskClass,tradeName,manufacturerName,manufacturerSrn,deviceStatusType,manufacturerNames,manufacturerStatus,latestVersion,versionNumber,basicUdiDataUuid,basicUdiDataUlid,basicUdiDataVersionState,versionState,deviceName,deviceModel,lastUpdateDate,reference,basicUdiDataVersionNumber,issuingAgency,containerPackageCount,mfOrPrSrn,applicableLegislation,authorisedRepresentativeSrn,authorisedRepresentativeName,sterile,multiComponent,deviceCriterion,eudamed_url" \
+> "$output_file"
+
+    local jq_filter='
+      def code: if type == "object" and has("code") then .code else "" end;
+      [
+        .basicUdi // "",
+        .primaryDi // "",
+        .uuid // "",
+        .ulid // "",
+        .basicUdiDiDataUlid // "",
+        (.riskClass | code),
+        .tradeName // "",
+        .manufacturerName // "",
+        .manufacturerSrn // "",
+        (.deviceStatusType | code),
+        .manufacturerNames // "",
+        (.manufacturerStatus | code),
+        (.latestVersion // ""),
+        (.versionNumber // ""),
+        .basicUdiDataUuid // "",
+        .basicUdiDataUlid // "",
+        .basicUdiDataVersionState // "",
+        .versionState // "",
+        .deviceName // "",
+        .deviceModel // "",
+        .lastUpdateDate // "",
+        .reference // "",
+        (.basicUdiDataVersionNumber // ""),
+        .issuingAgency // "",
+        (.containerPackageCount // ""),
+        .mfOrPrSrn // "",
+        .applicableLegislation // "",
+        .authorisedRepresentativeSrn // "",
+        .authorisedRepresentativeName // "",
+        .sterile // "",
+        .multiComponent // "",
+        .deviceCriterion // "",
+        ($base + (.uuid // ""))
+      ] | @csv
+    '
+
+    if [[ $lines -ge 999999999 ]]; then
+        jq -r --arg base "$portal_url" "$jq_filter" "$input_file" >> "$output_file"
+    else
+        head -n "$lines" "$input_file" | \
+        jq -r --arg base "$portal_url" "$jq_filter" >> "$output_file"
+    fi
+
+    local total_lines=$(wc -l < "$output_file")
+    local data_lines=$((total_lines - 1))
+    echo "Done!"
+    echo "   → Output: $output_file"
+    echo "   → $data_lines data rows + 1 header = $total_lines total lines"
+    echo "   → Every row has a direct clickable EUDAMED URL"
+}
+
+# ----------------------------- Main -------------------------------------------
+MODE=""
+MODE_ARG=""
+
+for arg in "$@"; do
+    case "${arg}" in
+        --full)         MODE="full" ;;
+        --sample)       MODE="sample" ;;
+        --pages)        MODE="pages" ;;
+        --csv-sample)   MODE="csv-sample" ;;
+        --to-csv)       MODE="to-csv" ;;
+        -h|--help)      show_help ;;
+        *)
+            # Capture numeric/string args for modes that need them
+            if [[ -z "$MODE_ARG" ]]; then
+                MODE_ARG="$arg"
+            else
+                echo "Error: unexpected argument '${arg}'"
+                exit 1
+            fi
+            ;;
+    esac
+done
+
+case "${MODE}" in
+    full)       download_full ;;
+    sample)     download_sample ;;
+    pages)
+        [[ -z "${MODE_ARG}" ]] && { echo "Error: --pages requires a number"; exit 1; }
+        download_pages "$MODE_ARG"
+        ;;
+    csv-sample) download_csv_sample ;;
+    to-csv)
+        convert_to_csv "${MODE_ARG:-10000}"
+        ;;
+    *)
+        echo "Error: specify a mode (--full, --sample, --pages N, --csv-sample, --to-csv)"
+        echo "Run '$(basename "$0") --help' for usage."
+        exit 1
+        ;;
+esac

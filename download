@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# =============================================================================
+# Unified EUDAMED actor downloader (importers, manufacturers, authorised reps)
+# Auto-detects total pages from the API.
+# =============================================================================
+set -euo pipefail
+
+# ----------------------------- Usage ------------------------------------------
+show_help() {
+    cat <<EOF
+Usage: $(basename "$0") <option>
+
+Options:
+  --importer      Download importers
+  --manufacturer  Download manufacturers
+  --ar            Download authorised representatives
+  --count         Just show the total number of records (combine with a category)
+  -h, --help      Show this help
+
+Examples:
+  $(basename "$0") --importer
+  $(basename "$0") --manufacturer
+  $(basename "$0") --ar
+  $(basename "$0") --importer --count
+EOF
+    exit 0
+}
+
+# ----------------------------- Parse arguments --------------------------------
+COUNT_ONLY=false
+ACTOR_TYPE=""
+OUT_DIR=""
+
+for arg in "$@"; do
+    case "${arg}" in
+        --importer)
+            ACTOR_TYPE="refdata.actor-type.importer"
+            OUT_DIR="eudamed_importer"
+            ;;
+        --manufacturer)
+            ACTOR_TYPE="refdata.actor-type.manufacturer"
+            OUT_DIR="eudamed_manufacturer"
+            ;;
+        --ar)
+            ACTOR_TYPE="refdata.actor-type.authorised-representative"
+            OUT_DIR="eudamed_authorised_reps"
+            ;;
+        --count)
+            COUNT_ONLY=true
+            ;;
+        -h|--help)
+            show_help
+            ;;
+        *)
+            echo "Error: unknown option '${arg}'"
+            echo "Run '$(basename "$0") --help' for usage."
+            exit 1
+            ;;
+    esac
+done
+
+if [[ -z "${ACTOR_TYPE}" ]]; then
+    echo "Error: specify a category (--importer, --manufacturer, or --ar)"
+    echo "Run '$(basename "$0") --help' for usage."
+    exit 1
+fi
+
+# ----------------------------- Constants --------------------------------------
+BASE_URL="https://ec.europa.eu/tools/eudamed/api/eos"
+PARAMS="?size=300&sort=srn,asc&sort=versionNumber,DESC&actorTypeCode=${ACTOR_TYPE}&languageIso2Code=en"
+USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# ----------------------------- Setup ------------------------------------------
+mkdir -p "${OUT_DIR}"
+cd "${OUT_DIR}"
+
+# ----------------------------- Detect pages -----------------------------------
+echo "Fetching page 0 to detect total pages..."
+url="${BASE_URL}${PARAMS}&page=0"
+curl -f -s --retry 5 --retry-delay 5 \
+     -H "User-Agent: ${USER_AGENT}" \
+     -H "Accept: application/json" \
+     -o "page_0.json" "${url}"
+
+if ! jq empty "page_0.json" >/dev/null 2>&1; then
+    echo "Error: page_0.json is not valid JSON."
+    exit 1
+fi
+
+TOTAL_PAGES=$(jq '.totalPages // empty' page_0.json)
+if [[ -z "${TOTAL_PAGES}" ]]; then
+    echo "Error: could not determine totalPages from API response."
+    exit 1
+fi
+
+TOTAL_ELEMENTS=$(jq '.totalElements // "unknown"' page_0.json)
+
+if [[ "${COUNT_ONLY}" == true ]]; then
+    echo "Total records: ${TOTAL_ELEMENTS}"
+    echo "Total pages: ${TOTAL_PAGES}"
+    exit 0
+fi
+
+LAST_PAGE=$((TOTAL_PAGES - 1))
+items=$(jq '.numberOfElements // (.content | length)' page_0.json)
+echo "   Page 0 has ${items} items (total pages: ${TOTAL_PAGES})"
+
+# ----------------------------- Download remaining pages -----------------------
+echo "Downloading pages 1 to ${LAST_PAGE}..."
+
+for ((page = 1; page <= LAST_PAGE; page++)); do
+    url="${BASE_URL}${PARAMS}&page=${page}"
+    filename="page_${page}.json"
+
+    echo "Downloading page ${page} -> ${filename}"
+    curl -f -s --retry 5 --retry-delay 5 \
+         -H "User-Agent: ${USER_AGENT}" \
+         -H "Accept: application/json" \
+         -o "${filename}" "${url}"
+
+    if ! jq empty "${filename}" >/dev/null 2>&1; then
+        echo "Error: ${filename} is not valid JSON or empty."
+        exit 1
+    fi
+
+    items=$(jq '.numberOfElements // (.content | length)' "${filename}")
+    echo "   Page ${page} has ${items} items"
+done
+
+# ----------------------------- Merge ------------------------------------------
+echo "All pages downloaded."
+echo "Merging all items into a single JSON array (merged.json)..."
+jq -s '[ .[].content[] ]' page_*.json > merged.json
+
+echo "Merge complete! Output file: $(pwd)/merged.json"
+
+total_items=$(jq 'length' merged.json)
+echo "Total items in merged file: ${total_items}"
+
+# ----------------------------- Metadata summary -------------------------------
+actual_size=$(jq '.size // "unknown"' page_0.json)
+echo "API metadata (from page 0):"
+echo "   Total elements: ${TOTAL_ELEMENTS}"
+echo "   Total pages (at requested size): ${TOTAL_PAGES}"
+echo "   Actual page size returned: ${actual_size}"
