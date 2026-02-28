@@ -47,15 +47,15 @@ find json/ -name '*.json' | ./json2csv -o output.csv+db -
 
 - **eudamed2sqlite.cpp** — imports CSV into SQLite (RFC 4180-compliant parser)
 - **json2csv.cpp** — multi-threaded converter from individual JSON device files to CSV and/or SQLite (uses nlohmann `json.hpp`)
-- **eudamed_migel.cpp** — matches EUDAMED devices against Swiss MiGeL codes, outputs only matched products
-- **migel.hpp** — header-only MiGeL CSV parser and keyword matcher (no external dependencies)
+- **eudamed_migel.cpp** — multi-threaded matcher: merges two EUDAMED SQLite DBs (dedup by UUID), matches device tradeNames against Swiss MiGeL codes using English→DE/FR/IT term expansion, outputs only matched products
+- **migel.hpp** — header-only MiGeL CSV parser and keyword matcher with inverted index, fuzzy/suffix matching, and per-language scoring (no external dependencies)
 
 ```bash
 # Convert XLSX to CSV (one file per sheet: DE, FR, IT)
 ssconvert --export-type=Gnumeric_stf:stf_csv --export-file-per-sheet xlsx/migel.xlsx xlsx/migel_%n.csv
 
 # Build and run EUDAMED-MiGeL matcher
-g++ -std=c++20 -O2 cpp/eudamed_migel.cpp -lsqlite3 -o eudamed_migel
+g++ -std=c++20 -O2 -pthread cpp/eudamed_migel.cpp -lsqlite3 -o eudamed_migel
 ./eudamed_migel --db1 db/eudamed_devices.db --db2 db/eudamed_full_with_urls.db \
     --migel-de xlsx/migel_0.csv --migel-fr xlsx/migel_1.csv --migel-it xlsx/migel_2.csv
 # Outputs: db/eudamed_migel_DD.MM.YYYY.db
