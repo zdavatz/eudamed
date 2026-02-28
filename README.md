@@ -68,3 +68,7 @@ Cross-referenced via UUIDs and SRN (Single Registration Number) codes.
 ## API
 
 Base URL: `https://ec.europa.eu/tools/eudamed/api/`
+
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
