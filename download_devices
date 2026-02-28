@@ -5,6 +5,7 @@
 set -euo pipefail
 
 BASE_URL="https://ec.europa.eu/tools/eudamed/api/devices/udiDiData"
+DETAIL_URL="https://ec.europa.eu/tools/eudamed/api/devices/basicUdiData/udiDiData"
 USER_AGENT="Mozilla/5.0 (compatible; EUDAMED-downloader/3.0)"
 
 # ----------------------------- Help -------------------------------------------
@@ -14,6 +15,8 @@ Usage: $(basename "$0") <option>
 
 Options:
   --full              Download entire dataset as resumable NDJSON
+  --full-detail       Download listing + per-device detail as JSON files
+                      (chains listing API → detail API for each UUID)
   --sample            Download first 100 records as pretty JSON
   --pages N           Download first N pages (~20 records each) as NDJSON
   --csv-sample        Download first 100 records directly to CSV
@@ -23,6 +26,7 @@ Options:
 
 Examples:
   $(basename "$0") --full
+  $(basename "$0") --full-detail
   $(basename "$0") --sample
   $(basename "$0") --pages 50
   $(basename "$0") --csv-sample
@@ -133,6 +137,141 @@ download_full() {
     rm -rf "$lockfile"
     echo "Full download finished!"
     echo "File: $output  ($(wc -l < "$output") records, $(du -h "$output" | cut -f1))"
+}
+
+# ----------------------------- Full detail mode (listing + per-device detail) --
+download_full_detail() {
+    local json_dir="json"
+    local listing_ndjson="eudamed_udi_di_full.ndjson"
+    local lockfile="${listing_ndjson}.detail.lock"
+    local progress_file="${listing_ndjson}.detail.progress"
+    local page_size=300
+    local max_retries=3
+    local fetched=0
+    local skipped=0
+    local failed=0
+
+    if ! mkdir "$lockfile" 2>/dev/null; then
+        echo "Another instance is already running (lockfile $lockfile exists)"
+        exit 1
+    fi
+    trap 'rm -rf "$lockfile"' EXIT
+
+    mkdir -p "$json_dir"
+
+    # Resume support: read last completed page and device index
+    local start_page=1
+    local start_idx=0
+    if [[ -f "$progress_file" ]]; then
+        start_page=$(sed -n '1p' "$progress_file")
+        start_idx=$(sed -n '2p' "$progress_file")
+        echo "Resuming from page $start_page, device index $start_idx"
+    else
+        echo "Starting fresh full-detail download"
+    fi
+
+    # Get total count
+    local total
+    total=$(curl -fsSL "${BASE_URL}?page=1&size=1" -A "$USER_AGENT" | jq -r '.totalElements')
+    local total_pages=$(( (total + page_size - 1) / page_size ))
+    echo "Total devices: $total  (~$total_pages pages of $page_size)"
+    echo ""
+
+    local page=$start_page
+    while :; do
+        echo "[Page $page/$total_pages] Fetching listing..."
+
+        local page_json
+        page_json=$(mktemp)
+        if ! curl -fsSL "${BASE_URL}?page=${page}&size=${page_size}" -A "$USER_AGENT" -o "$page_json"; then
+            echo "  Failed to fetch page $page — stopping."
+            failed=$((failed + 1))
+            rm -f "$page_json"
+            break
+        fi
+
+        # Also append listing data to NDJSON (for the basic fields)
+        if [[ $page -eq $start_page && $start_idx -eq 0 ]] || [[ $page -gt $start_page ]]; then
+            jq -c '.content[]' "$page_json" >> "$listing_ndjson"
+        fi
+
+        local count
+        count=$(jq -r '.content | length' "$page_json")
+        if [[ "$count" -eq 0 ]]; then
+            echo "  Empty page — end of data reached."
+            rm -f "$page_json" "$progress_file"
+            break
+        fi
+
+        # Extract UUIDs from this page
+        local uuids
+        uuids=$(jq -r '.content[].uuid' "$page_json")
+        rm -f "$page_json"
+
+        local idx=0
+        while IFS= read -r uuid; do
+            idx=$((idx + 1))
+
+            # Skip already-processed devices when resuming
+            if [[ $page -eq $start_page && $idx -le $start_idx ]]; then
+                continue
+            fi
+
+            local detail_file="${json_dir}/${uuid}.json"
+
+            # Skip if already downloaded
+            if [[ -f "$detail_file" && -s "$detail_file" ]]; then
+                skipped=$((skipped + 1))
+                continue
+            fi
+
+            # Fetch detail with retries
+            local ok=false
+            for attempt in $(seq 1 $max_retries); do
+                if curl -fsSL "${DETAIL_URL}/${uuid}" -A "$USER_AGENT" \
+                       -H "Accept: application/json" -o "$detail_file" 2>/dev/null; then
+                    # Verify it's valid JSON
+                    if jq empty "$detail_file" 2>/dev/null; then
+                        ok=true
+                        break
+                    fi
+                fi
+                sleep 0.3
+            done
+
+            if $ok; then
+                fetched=$((fetched + 1))
+            else
+                rm -f "$detail_file"
+                failed=$((failed + 1))
+            fi
+
+            # Progress indicator every 50 devices
+            local global_done=$(( (page - 1) * page_size + idx ))
+            if (( global_done % 50 == 0 )); then
+                printf "  [%d/%d] fetched=%d skipped=%d failed=%d\n" \
+                    "$global_done" "$total" "$fetched" "$skipped" "$failed"
+            fi
+
+            # Save progress
+            printf '%d\n%d\n' "$page" "$idx" > "$progress_file"
+
+            # Rate limit: brief pause between detail calls
+            sleep 0.1
+        done <<< "$uuids"
+
+        # Pause between pages
+        sleep 0.3
+        ((page++))
+    done
+
+    rm -rf "$lockfile"
+    trap - EXIT
+    echo ""
+    echo "Full-detail download finished!"
+    echo "  Listing NDJSON: $listing_ndjson"
+    echo "  Detail JSONs:   $json_dir/ ($fetched new, $skipped existing, $failed failed)"
+    echo "  Total files:    $(ls "$json_dir"/*.json 2>/dev/null | wc -l | tr -d ' ')"
 }
 
 # ----------------------------- CSV sample (direct download to CSV) ------------
@@ -282,6 +421,7 @@ MODE_ARG=""
 for arg in "$@"; do
     case "${arg}" in
         --full)         MODE="full" ;;
+        --full-detail)  MODE="full-detail" ;;
         --sample)       MODE="sample" ;;
         --pages)        MODE="pages" ;;
         --csv-sample)   MODE="csv-sample" ;;
@@ -301,6 +441,7 @@ done
 
 case "${MODE}" in
     full)       download_full ;;
+    full-detail) download_full_detail ;;
     sample)     download_sample ;;
     pages)
         [[ -z "${MODE_ARG}" ]] && { echo "Error: --pages requires a number"; exit 1; }
@@ -311,7 +452,7 @@ case "${MODE}" in
         convert_to_csv "${MODE_ARG:-10000}"
         ;;
     *)
-        echo "Error: specify a mode (--full, --sample, --pages N, --csv-sample, --to-csv)"
+        echo "Error: specify a mode (--full, --full-detail, --sample, --pages N, --csv-sample, --to-csv)"
         echo "Run '$(basename "$0") --help' for usage."
         exit 1
         ;;
