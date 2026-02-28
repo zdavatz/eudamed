@@ -1,5 +1,7 @@
-// migel.hpp — MiGeL XLSX parser & keyword matcher (converted from migel.rs)
-// Requires: OpenXLSX (https://github.com/troldal/OpenXLSX)
+// migel.hpp — MiGeL CSV parser & keyword matcher (converted from migel.rs)
+// No external dependencies — reads CSV files produced by ssconvert from gnumeric.
+// Usage: ssconvert --export-type=Gnumeric_stf:stf_csv --export-file-per-sheet migel.xlsx migel_%n.csv
+//        Then pass migel_0.csv (DE), migel_1.csv (FR), migel_2.csv (IT) to parse_migel_items().
 #pragma once
 
 #include <string>
@@ -7,9 +9,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
-#include <cmath>
+#include <fstream>
 #include <sstream>
-#include <OpenXLSX.hpp>
 
 namespace migel {
 
@@ -115,12 +116,18 @@ inline std::string to_lower(const std::string& s) {
     return out;
 }
 
+inline std::string trim(const std::string& s) {
+    auto start = s.find_first_not_of(" \t\r\n");
+    auto end = s.find_last_not_of(" \t\r\n");
+    if (start == std::string::npos) return "";
+    return s.substr(start, end - start + 1);
+}
+
 /// Get the first line of a string.
 inline std::string first_line(const std::string& text) {
     auto pos = text.find('\n');
     if (pos == std::string::npos) return text;
     std::string line = text.substr(0, pos);
-    // trim trailing \r
     if (!line.empty() && line.back() == '\r') line.pop_back();
     return line;
 }
@@ -184,115 +191,150 @@ inline std::vector<std::string> extract_secondary_keywords(const std::string& te
     return extract_keywords_from(rest, 8);
 }
 
-// ------------------------------ XLSX parsing ---------------------------------
+// ------------------------------ RFC 4180 CSV parser ---------------------------
 
-/// Read a cell value as a trimmed string.
-inline std::string cell_str(OpenXLSX::XLWorksheet& ws, uint32_t row, uint16_t col) {
-    auto cell = ws.cell(row, col);
-    auto val = cell.value();
-    std::string s;
-    if (val.type() == OpenXLSX::XLValueType::String)
-        s = val.get<std::string>();
-    else if (val.type() == OpenXLSX::XLValueType::Integer)
-        s = std::to_string(val.get<int64_t>());
-    else if (val.type() == OpenXLSX::XLValueType::Float)
-        s = std::to_string(val.get<double>());
-    else if (val.type() == OpenXLSX::XLValueType::Boolean)
-        s = val.get<bool>() ? "true" : "false";
-    // trim
-    auto start = s.find_first_not_of(" \t\r\n");
-    auto end = s.find_last_not_of(" \t\r\n");
-    if (start == std::string::npos) return "";
-    return s.substr(start, end - start + 1);
-}
+/// Parse a single CSV row from a stream, handling quoted fields with embedded
+/// newlines and escaped quotes. Returns false on EOF.
+inline bool parse_csv_row(std::istream& in, std::vector<std::string>& fields) {
+    fields.clear();
+    std::string field;
+    bool in_quotes = false;
+    char c;
 
-/// Parse all MiGeL items from the XLSX file.
-/// Keeps per-language keywords separate for scoring, builds combined keyword set for candidates.
-inline std::vector<MigelItem> parse_migel_items(const std::string& path) {
-    OpenXLSX::XLDocument doc;
-    doc.open(path);
-    auto sheet_names = doc.workbook().sheetNames();
-
-    // --- Pass 1: Parse German sheet (index 0) ---
-    auto ws_de = doc.workbook().worksheet(sheet_names[0]);
-    auto row_count_de = ws_de.rowCount();
-
-    std::vector<std::string> category_texts(7);
-    std::vector<MigelItem> items;
-
-    for (uint32_t row_idx = 2; row_idx <= row_count_de; ++row_idx) { // skip header (row 1)
-        std::string pos_nr = cell_str(ws_de, row_idx, 8);       // H = col 8
-        std::string bezeichnung = cell_str(ws_de, row_idx, 10);  // J = col 10
-        std::string limitation = cell_str(ws_de, row_idx, 11);   // K = col 11
-
-        if (pos_nr.empty()) {
-            // Category header row — update hierarchy
-            for (int i = 6; i >= 1; --i) {
-                std::string val = cell_str(ws_de, row_idx, static_cast<uint16_t>(i + 1));
-                if (!val.empty()) {
-                    category_texts[i] = first_line(bezeichnung);
-                    for (int j = i + 1; j < 7; ++j)
-                        category_texts[j].clear();
-                    break;
+    while (in.get(c)) {
+        if (in_quotes) {
+            if (c == '"') {
+                char next = static_cast<char>(in.peek());
+                if (next == '"') {
+                    in.get(c); // consume escaped quote
+                    field += '"';
+                } else {
+                    in_quotes = false;
                 }
+            } else {
+                field += c;
             }
         } else {
-            // Item with position number
-            std::string fl = first_line(bezeichnung);
-
-            auto keywords_de = extract_keywords(fl);
-            auto secondary_de = extract_secondary_keywords(bezeichnung);
-
-            auto all_kw = extract_keywords_full(bezeichnung);
-            if (!limitation.empty()) {
-                auto lim_kw = extract_keywords_full(limitation);
-                all_kw.insert(all_kw.end(), lim_kw.begin(), lim_kw.end());
-                std::sort(all_kw.begin(), all_kw.end());
-                all_kw.erase(std::unique(all_kw.begin(), all_kw.end()), all_kw.end());
+            if (c == '"') {
+                in_quotes = true;
+            } else if (c == ',') {
+                fields.push_back(field);
+                field.clear();
+            } else if (c == '\n') {
+                fields.push_back(field);
+                return true;
+            } else if (c == '\r') {
+                // skip \r, \n will follow
+            } else {
+                field += c;
             }
-
-            MigelItem item;
-            item.position_nr = std::move(pos_nr);
-            item.bezeichnung = std::move(fl);
-            item.limitation = std::move(limitation);
-            item.keywords_de = std::move(keywords_de);
-            item.secondary_de = std::move(secondary_de);
-            item.all_keywords = std::move(all_kw);
-            items.push_back(std::move(item));
         }
     }
+    // EOF
+    if (!field.empty() || !fields.empty()) {
+        fields.push_back(field);
+        return true;
+    }
+    return false;
+}
 
-    // --- Pass 2: Parse French and Italian sheets for per-language keywords ---
+/// Get a field by index, returning empty string if out of bounds.
+inline std::string csv_field(const std::vector<std::string>& fields, size_t idx) {
+    if (idx >= fields.size()) return "";
+    return trim(fields[idx]);
+}
+
+// ------------------------------ CSV parsing -----------------------------------
+
+/// Parse a single MiGeL CSV sheet. Returns rows as (pos_nr, bezeichnung, limitation).
+/// Column indices: 7=Positions-Nr (H), 9=Bezeichnung (J), 10=Limitation (K)
+/// Category rows (1..6, cols B-G) have no Positions-Nr.
+inline std::vector<std::tuple<std::string, std::string, std::string>>
+parse_csv_sheet(const std::string& path) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        std::cerr << "Error: cannot open " << path << "\n";
+        return {};
+    }
+
+    std::vector<std::tuple<std::string, std::string, std::string>> rows;
+    std::vector<std::string> fields;
+
+    // Skip header row
+    parse_csv_row(file, fields);
+
+    while (parse_csv_row(file, fields)) {
+        std::string pos_nr = csv_field(fields, 7);
+        std::string bezeichnung = csv_field(fields, 9);
+        std::string limitation = csv_field(fields, 10);
+        rows.emplace_back(std::move(pos_nr), std::move(bezeichnung), std::move(limitation));
+    }
+    return rows;
+}
+
+/// Parse MiGeL items from CSV files (one per language sheet).
+/// csv_de: German sheet CSV (required)
+/// csv_fr: French sheet CSV (optional, pass "" to skip)
+/// csv_it: Italian sheet CSV (optional, pass "" to skip)
+inline std::vector<MigelItem> parse_migel_items(
+    const std::string& csv_de,
+    const std::string& csv_fr = "",
+    const std::string& csv_it = "")
+{
+    // --- Pass 1: Parse German sheet ---
+    auto rows_de = parse_csv_sheet(csv_de);
+    std::vector<MigelItem> items;
+
+    for (const auto& [pos_nr, bezeichnung, limitation] : rows_de) {
+        if (pos_nr.empty()) continue; // category header row
+
+        std::string fl = first_line(bezeichnung);
+        auto keywords_de = extract_keywords(fl);
+        auto secondary_de = extract_secondary_keywords(bezeichnung);
+
+        auto all_kw = extract_keywords_full(bezeichnung);
+        if (!limitation.empty()) {
+            auto lim_kw = extract_keywords_full(limitation);
+            all_kw.insert(all_kw.end(), lim_kw.begin(), lim_kw.end());
+            std::sort(all_kw.begin(), all_kw.end());
+            all_kw.erase(std::unique(all_kw.begin(), all_kw.end()), all_kw.end());
+        }
+
+        MigelItem item;
+        item.position_nr = pos_nr;
+        item.bezeichnung = std::move(fl);
+        item.limitation = limitation;
+        item.keywords_de = std::move(keywords_de);
+        item.secondary_de = std::move(secondary_de);
+        item.all_keywords = std::move(all_kw);
+        items.push_back(std::move(item));
+    }
+
+    // --- Pass 2: Parse French and Italian sheets ---
     std::unordered_map<std::string, size_t> pos_map;
     for (size_t i = 0; i < items.size(); ++i)
         pos_map[items[i].position_nr] = i;
 
-    size_t max_sheet = std::min(sheet_names.size(), static_cast<size_t>(3));
-    for (size_t sheet_idx = 1; sheet_idx < max_sheet; ++sheet_idx) {
-        auto ws = doc.workbook().worksheet(sheet_names[sheet_idx]);
-        auto rc = ws.rowCount();
-
-        for (uint32_t row_idx = 2; row_idx <= rc; ++row_idx) {
-            std::string pos_nr = cell_str(ws, row_idx, 8);
+    auto process_lang_sheet = [&](const std::string& path, int lang) {
+        if (path.empty()) return;
+        auto rows = parse_csv_sheet(path);
+        for (const auto& [pos_nr, bezeichnung, limitation] : rows) {
+            if (pos_nr.empty()) continue;
             auto it = pos_map.find(pos_nr);
             if (it == pos_map.end()) continue;
 
             size_t item_idx = it->second;
-            std::string bezeichnung = cell_str(ws, row_idx, 10);
-            std::string limitation = cell_str(ws, row_idx, 11);
-
             auto kw = extract_keywords(bezeichnung);
             auto secondary = extract_secondary_keywords(bezeichnung);
 
-            if (sheet_idx == 1) {
+            if (lang == 1) {
                 items[item_idx].keywords_fr = std::move(kw);
                 items[item_idx].secondary_fr = std::move(secondary);
-            } else if (sheet_idx == 2) {
+            } else if (lang == 2) {
                 items[item_idx].keywords_it = std::move(kw);
                 items[item_idx].secondary_it = std::move(secondary);
             }
 
-            // Candidate index: full text + limitation
             auto full_kw = extract_keywords_full(bezeichnung);
             items[item_idx].all_keywords.insert(
                 items[item_idx].all_keywords.end(), full_kw.begin(), full_kw.end());
@@ -302,7 +344,10 @@ inline std::vector<MigelItem> parse_migel_items(const std::string& path) {
                     items[item_idx].all_keywords.end(), lim_kw.begin(), lim_kw.end());
             }
         }
-    }
+    };
+
+    process_lang_sheet(csv_fr, 1);
+    process_lang_sheet(csv_it, 2);
 
     // Deduplicate all_keywords per item
     for (auto& item : items) {
@@ -312,7 +357,6 @@ inline std::vector<MigelItem> parse_migel_items(const std::string& path) {
             item.all_keywords.end());
     }
 
-    doc.close();
     return items;
 }
 

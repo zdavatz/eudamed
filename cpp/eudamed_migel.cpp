@@ -1,6 +1,7 @@
 // eudamed_migel.cpp — Match EUDAMED devices against Swiss MiGeL codes
-// Build: g++ -std=c++20 -O2 cpp/eudamed_migel.cpp -lsqlite3 -lOpenXLSX -o eudamed_migel
-// Usage: ./eudamed_migel --db1 db/eudamed_devices.db --db2 db/eudamed_full_with_urls.db --migel xlsx/migel.xlsx
+// Build: g++ -std=c++20 -O2 cpp/eudamed_migel.cpp -lsqlite3 -o eudamed_migel
+// Usage: ./eudamed_migel --db1 db/eudamed_devices.db --db2 db/eudamed_full_with_urls.db \
+//          --migel-de xlsx/migel_0.csv --migel-fr xlsx/migel_1.csv --migel-it xlsx/migel_2.csv
 
 #include <iostream>
 #include <string>
@@ -40,7 +41,9 @@ static int count_non_empty(const std::vector<std::string>& row) {
 struct Args {
     std::string db1;
     std::string db2;
-    std::string migel_xlsx;
+    std::string migel_de;
+    std::string migel_fr;
+    std::string migel_it;
 };
 
 static Args parse_args(int argc, char* argv[]) {
@@ -49,16 +52,21 @@ static Args parse_args(int argc, char* argv[]) {
         std::string arg = argv[i];
         if (arg == "--db1" && i + 1 < argc) args.db1 = argv[++i];
         else if (arg == "--db2" && i + 1 < argc) args.db2 = argv[++i];
-        else if (arg == "--migel" && i + 1 < argc) args.migel_xlsx = argv[++i];
+        else if (arg == "--migel-de" && i + 1 < argc) args.migel_de = argv[++i];
+        else if (arg == "--migel-fr" && i + 1 < argc) args.migel_fr = argv[++i];
+        else if (arg == "--migel-it" && i + 1 < argc) args.migel_it = argv[++i];
         else if (arg == "-h" || arg == "--help") {
-            std::cout << "Usage: " << argv[0] << " --db1 <db> --db2 <db> --migel <xlsx>\n"
+            std::cout << "Usage: " << argv[0]
+                      << " --db1 <db> --db2 <db> --migel-de <csv> --migel-fr <csv> --migel-it <csv>\n"
                       << "\nMerges two EUDAMED SQLite DBs, matches devices against MiGeL codes,\n"
-                      << "and outputs db/eudamed_migel_DD.MM.YYYY.db with matched products.\n";
+                      << "and outputs db/eudamed_migel_DD.MM.YYYY.db with matched products.\n"
+                      << "\nGenerate CSVs from XLSX with:\n"
+                      << "  ssconvert --export-type=Gnumeric_stf:stf_csv --export-file-per-sheet xlsx/migel.xlsx xlsx/migel_%n.csv\n";
             exit(0);
         }
     }
-    if (args.db1.empty() || args.db2.empty() || args.migel_xlsx.empty()) {
-        std::cerr << "Error: --db1, --db2, and --migel are all required.\n"
+    if (args.db1.empty() || args.db2.empty() || args.migel_de.empty()) {
+        std::cerr << "Error: --db1, --db2, and --migel-de are required.\n"
                   << "Run with --help for usage.\n";
         exit(1);
     }
@@ -162,9 +170,10 @@ static size_t read_db_rows(
 int main(int argc, char* argv[]) {
     auto args = parse_args(argc, argv);
 
-    // Step 1: Load MiGeL items
-    std::cout << "Loading MiGeL items from " << args.migel_xlsx << " ...\n";
-    auto migel_items = migel::parse_migel_items(args.migel_xlsx);
+    // Step 1: Load MiGeL items from CSV files
+    std::cout << "Loading MiGeL items from CSVs (DE: " << args.migel_de
+              << ", FR: " << args.migel_fr << ", IT: " << args.migel_it << ") ...\n";
+    auto migel_items = migel::parse_migel_items(args.migel_de, args.migel_fr, args.migel_it);
     std::cout << "   " << migel_items.size() << " MiGeL items loaded.\n";
 
     auto keyword_index = migel::build_keyword_index(migel_items);

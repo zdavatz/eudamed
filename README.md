@@ -7,7 +7,7 @@ ETL toolkit for downloading and processing data from the [European Union Medical
 - `bash`, `curl`, `jq`, `sqlite3`
 - Rust toolchain (for the JSON-to-CSV converter)
 - `g++` with `libsqlite3-dev` (for the SQLite importer)
-- [OpenXLSX](https://github.com/troldal/OpenXLSX) (for the MiGeL matcher)
+- `ssconvert` from gnumeric (for XLSX to CSV conversion)
 
 ## Scripts
 
@@ -48,12 +48,16 @@ find json/ -name '*.json' | ./json2csv -o output.csv+db -
 - **eudamed2sqlite.cpp** — imports CSV into SQLite (RFC 4180-compliant parser)
 - **json2csv.cpp** — multi-threaded converter from individual JSON device files to CSV and/or SQLite (uses nlohmann `json.hpp`)
 - **eudamed_migel.cpp** — matches EUDAMED devices against Swiss MiGeL codes, outputs only matched products
-- **migel.hpp** — header-only MiGeL XLSX parser and keyword matcher (requires OpenXLSX)
+- **migel.hpp** — header-only MiGeL CSV parser and keyword matcher (no external dependencies)
 
 ```bash
-# EUDAMED-MiGeL matcher
-g++ -std=c++20 -O2 cpp/eudamed_migel.cpp -lsqlite3 -lOpenXLSX -o eudamed_migel
-./eudamed_migel --db1 db/eudamed_devices.db --db2 db/eudamed_full_with_urls.db --migel xlsx/migel.xlsx
+# Convert XLSX to CSV (one file per sheet: DE, FR, IT)
+ssconvert --export-type=Gnumeric_stf:stf_csv --export-file-per-sheet xlsx/migel.xlsx xlsx/migel_%n.csv
+
+# Build and run EUDAMED-MiGeL matcher
+g++ -std=c++20 -O2 cpp/eudamed_migel.cpp -lsqlite3 -o eudamed_migel
+./eudamed_migel --db1 db/eudamed_devices.db --db2 db/eudamed_full_with_urls.db \
+    --migel-de xlsx/migel_0.csv --migel-fr xlsx/migel_1.csv --migel-it xlsx/migel_2.csv
 # Outputs: db/eudamed_migel_DD.MM.YYYY.db
 ```
 
