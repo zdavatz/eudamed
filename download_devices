@@ -271,7 +271,7 @@ download_full_detail() {
     echo "Full-detail download finished!"
     echo "  Listing NDJSON: $listing_ndjson"
     echo "  Detail JSONs:   $json_dir/ ($fetched new, $skipped existing, $failed failed)"
-    echo "  Total files:    $(ls "$json_dir"/*.json 2>/dev/null | wc -l | tr -d ' ')"
+    echo "  Total files:    $(find "$json_dir" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')"
 }
 
 # ----------------------------- CSV sample (direct download to CSV) ------------

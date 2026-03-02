@@ -263,6 +263,7 @@ void worker_thread(
         }
 
         if (db && stmt) {
+            std::lock_guard<std::mutex> lk(file_mtx);
             sqlite3_reset(stmt);
             sqlite3_clear_bindings(stmt);
 
@@ -288,10 +289,8 @@ void worker_thread(
                 }
             }
 
-            { std::lock_guard<std::mutex> lk(file_mtx);
-              if (sqlite3_step(stmt) != SQLITE_DONE)
-                  std::cerr << "INSERT error: " << sqlite3_errmsg(db) << "\n";
-            }
+            if (sqlite3_step(stmt) != SQLITE_DONE)
+                std::cerr << "INSERT error: " << sqlite3_errmsg(db) << "\n";
         }
 
         if ((++processed_files) % 10000 == 0) {
@@ -315,14 +314,19 @@ int main(int argc, char* argv[]) {
     bool want_db  = want_csv || spec.ends_with(".db");
     std::string csv_path, db_path;
 
-    if (want_csv) { csv_path = spec.substr(0, spec.size()-7); db_path = csv_path + ".db"; }
+    if (want_csv) { csv_path = spec.substr(0, spec.size()-3); db_path = csv_path.substr(0, csv_path.size()-4) + ".db"; }
     else if (spec == "eudamed_extend.db") db_path = "eudamed_extend_" + current_date_str() + ".db";
     else db_path = spec;
 
     std::vector<fs::path> files;
-    std::unique_ptr<std::istream> src;
+    auto noop_del = [](std::istream*){};
+    std::unique_ptr<std::istream, decltype(noop_del)> src(nullptr, noop_del);
     if (std::string(argv[3]) == "-") src.reset(&std::cin);
-    else { src = std::make_unique<std::ifstream>(argv[3]); if (!*src) return 1; }
+    else {
+        auto* ifs = new std::ifstream(argv[3]);
+        if (!*ifs) { delete ifs; return 1; }
+        src.reset(ifs);
+    }
 
     std::cout << "Lese Dateiliste...\n";
     std::string line;

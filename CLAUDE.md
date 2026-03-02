@@ -16,7 +16,7 @@ cd authorized_representatives && cargo build --release
 ### C++ (cpp/)
 ```bash
 g++ cpp/eudamed2sqlite.cpp -lsqlite3 -o eudamed2sqlite
-g++ -std=c++20 -O2 -pthread cpp/json2csv.cpp -lsqlite3 -o json2csv
+g++ -std=c++20 -O2 -pthread -I cpp cpp/json2csv.cpp -lsqlite3 -o json2csv
 g++ -std=c++20 -O2 -pthread cpp/eudamed_migel.cpp -lsqlite3 -o eudamed_migel
 ```
 
@@ -27,7 +27,7 @@ No build needed. Require: `bash`, `curl`, `jq`, `sqlite3`.
 
 | Tool | Language | Purpose |
 |------|----------|---------|
-| `download_devices` | Bash+jq | Unified device downloader & converter (`--full`, `--sample`, `--pages N`, `--csv-sample`, `--to-csv [N\|all]`) |
+| `download_devices` | Bash+jq | Unified device downloader & converter (`--full`, `--full-detail`, `--sample`, `--pages N`, `--csv-sample`, `--to-csv [N\|all]`) |
 | `cpp/eudamed2sqlite.cpp` | C++ | Import CSV into SQLite database (RFC 4180-compliant parser) |
 | `cpp/json2csv.cpp` | C++ | Multi-threaded JSON files → CSV+SQLite converter (uses nlohmann json.hpp) |
 | `cpp/eudamed_migel.cpp` | C++ | Multi-threaded EUDAMED↔MiGeL matcher: merges two DBs (case-insensitive dedup by UUID), per-field language detection (EN/DE/FR/IT), language-routed matching, skips unsupported languages |

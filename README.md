@@ -26,6 +26,7 @@ Auto-detects total pages from the API. Data is saved as paginated JSON files and
 
 ```bash
 ./download_devices --full          # Full dataset as resumable NDJSON
+./download_devices --full-detail   # Listing + per-device detail JSON (json/ dir)
 ./download_devices --sample        # First 100 records as pretty JSON
 ./download_devices --pages 50      # First 50 pages (~1000 records) as NDJSON
 ./download_devices --csv-sample    # First 100 records directly to CSV
@@ -41,8 +42,9 @@ g++ cpp/eudamed2sqlite.cpp -lsqlite3 -o eudamed2sqlite
 ./eudamed2sqlite
 
 # Multi-threaded JSON files to CSV+SQLite converter
-g++ -std=c++20 -O2 -pthread cpp/json2csv.cpp -lsqlite3 -o json2csv
-find json/ -name '*.json' | ./json2csv -o output.csv+db -
+g++ -std=c++20 -O2 -pthread -I cpp cpp/json2csv.cpp -lsqlite3 -o json2csv
+mkdir -p csv
+find json -maxdepth 1 -type f -name '*.json' | ./json2csv -o csv/eudamed_$(date +%d.%m.%Y).csv+db -
 ```
 
 - **eudamed2sqlite.cpp** — imports CSV into SQLite (RFC 4180-compliant parser)
