@@ -27,7 +27,7 @@ No build needed. Require: `bash`, `curl`, `jq`, `sqlite3`.
 
 | Tool | Language | Purpose |
 |------|----------|---------|
-| `download_devices` | Bash+jq | Unified device downloader & converter (`--full`, `--full-detail`, `--sample`, `--pages N`, `--csv-sample`, `--to-csv [N\|all]`) |
+| `download_devices` | Bash+jq | Unified device downloader & converter (`--full`, `--full-detail`, `--sample`, `--pages N`, `--csv-sample`, `--to-csv [N\|all]`). `--full-detail` chains listing → detail → Basic UDI-DI (MDR booleans, cached in `/tmp/basic_udi_cache/`) |
 | `cpp/eudamed2sqlite.cpp` | C++ | Import CSV into SQLite database (RFC 4180-compliant parser) |
 | `cpp/json2csv.cpp` | C++ | Multi-threaded JSON files → CSV+SQLite converter (uses nlohmann json.hpp) |
 | `cpp/eudamed_migel.cpp` | C++ | Multi-threaded EUDAMED↔MiGeL matcher: merges two DBs (case-insensitive dedup by UUID), per-field language detection (EN/DE/FR/IT), language-routed matching, skips unsupported languages |
@@ -38,6 +38,11 @@ No build needed. Require: `bash`, `curl`, `jq`, `sqlite3`.
 ## Architecture
 
 **Data pipeline flow:** EUDAMED API → paginated JSON → NDJSON/JSON → CSV → SQLite
+
+**Three-level device data:** The EUDAMED API has three levels of device data:
+1. **Listing** (`GET /devices/udiDiData?page=N`) — flat summary: GTIN, manufacturer SRN, risk class
+2. **Detail** (`GET /devices/basicUdiData/udiDiData/{uuid}`) — per-device JSON with clinical sizes, substances, market info (returns UDI-DI or Basic UDI-DI depending on UUID type)
+3. **Basic UDI-DI** (`GET /devices/basicUdiData/udiDiData/{udi-di-uuid}`) — MDR mandatory fields (active, implantable, measuringFunction, multiComponent, tissue) for a UDI-DI's parent Basic UDI-DI record. Cached in `/tmp/basic_udi_cache/`.
 
 - API downloaders handle pagination (Spring-style `page`/`size`/`sort` params) with browser-like User-Agent headers
 - NDJSON is the primary intermediate format for streaming large datasets (~946MB full dataset)

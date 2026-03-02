@@ -15,8 +15,8 @@ Usage: $(basename "$0") <option>
 
 Options:
   --full              Download entire dataset as resumable NDJSON
-  --full-detail       Download listing + per-device detail as JSON files
-                      (chains listing API → detail API for each UUID)
+  --full-detail       Download listing + per-device detail + Basic UDI-DI as JSON
+                      (chains listing → detail → Basic UDI-DI for MDR fields)
   --sample            Download first 100 records as pretty JSON
   --pages N           Download first N pages (~20 records each) as NDJSON
   --csv-sample        Download first 100 records directly to CSV
@@ -272,6 +272,64 @@ download_full_detail() {
     echo "  Listing NDJSON: $listing_ndjson"
     echo "  Detail JSONs:   $json_dir/ ($fetched new, $skipped existing, $failed failed)"
     echo "  Total files:    $(find "$json_dir" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')"
+
+    # Download Basic UDI-DI data for UDI-DI records (MDR mandatory fields)
+    echo ""
+    echo "Downloading Basic UDI-DI data for UDI-DI records..."
+    local basic_udi_url="https://ec.europa.eu/tools/eudamed/api/devices/basicUdiData/udiDiData"
+    local basic_cache="/tmp/basic_udi_cache"
+    mkdir -p "$basic_cache"
+
+    local basic_fetched=0
+    local basic_skipped=0
+    local basic_failed=0
+
+    for detail_file in "$json_dir"/*.json; do
+        [[ -f "$detail_file" ]] || continue
+        local uuid
+        uuid=$(basename "$detail_file" .json)
+        local cache_file="$basic_cache/$uuid.json"
+
+        # Skip if already cached
+        if [[ -f "$cache_file" && -s "$cache_file" ]]; then
+            basic_skipped=$((basic_skipped + 1))
+            continue
+        fi
+
+        # Only fetch for UDI-DI level files (have primaryDi)
+        if ! head -c 500 "$detail_file" | grep -q '"primaryDi"'; then
+            continue
+        fi
+
+        local ok=false
+        for attempt in 1 2 3; do
+            if curl -fsSL "${basic_udi_url}/${uuid}?languageIso2Code=en" -A "$USER_AGENT" \
+                   -H "Accept: application/json" -o "$cache_file" 2>/dev/null; then
+                if jq empty "$cache_file" 2>/dev/null; then
+                    ok=true
+                    break
+                fi
+            fi
+            sleep 0.3
+        done
+
+        if $ok; then
+            basic_fetched=$((basic_fetched + 1))
+        else
+            rm -f "$cache_file"
+            basic_failed=$((basic_failed + 1))
+        fi
+
+        if (( (basic_fetched + basic_skipped + basic_failed) % 100 == 0 )); then
+            printf "  Basic UDI-DI: fetched=%d skipped=%d failed=%d\n" \
+                "$basic_fetched" "$basic_skipped" "$basic_failed"
+        fi
+
+        sleep 0.1
+    done
+
+    echo "  Basic UDI-DI: $basic_fetched new, $basic_skipped cached, $basic_failed failed"
+    echo "  Cache: $basic_cache/ ($(find "$basic_cache" -maxdepth 1 -name '*.json' -type f | wc -l | tr -d ' ') files)"
 }
 
 # ----------------------------- CSV sample (direct download to CSV) ------------

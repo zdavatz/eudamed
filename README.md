@@ -26,7 +26,7 @@ Auto-detects total pages from the API. Data is saved as paginated JSON files and
 
 ```bash
 ./download_devices --full          # Full dataset as resumable NDJSON
-./download_devices --full-detail   # Listing + per-device detail JSON (json/ dir)
+./download_devices --full-detail   # Listing + detail + Basic UDI-DI (json/ + /tmp/basic_udi_cache/)
 ./download_devices --sample        # First 100 records as pretty JSON
 ./download_devices --pages 50      # First 50 pages (~1000 records) as NDJSON
 ./download_devices --csv-sample    # First 100 records directly to CSV
