@@ -87,6 +87,20 @@ EUDAMED API → paginated JSON → NDJSON/JSON → CSV → SQLite
 
 Cross-referenced via UUIDs and SRN (Single Registration Number) codes.
 
+## EUDAMED Device API — Three Data Levels
+
+EUDAMED exposes device data across three separate API levels. All three must be merged to produce a complete GS1 firstbase record:
+
+| Level | Endpoint | Data |
+|---|---|---|
+| 1. Listing | `GET /devices/udiDiData?page=N` | Flat summary: GTIN, manufacturer SRN, AR SRN, risk class, basicUdi code |
+| 2. UDI-DI Detail | `GET /devices/udiDiData/{uuid}` | Rich product data: clinical sizes, substances, market info, warnings, storage, trade name, sterility |
+| 3. Basic UDI-DI | `GET /devices/basicUdiData/udiDiData/{uuid}` | Device family data: active, implantable, measuringFunction, multiComponent, reusable, medicinalProduct, humanTissues, animalTissues, humanProduct, administeringMedicine |
+
+The **listing** (level 1) provides manufacturer/AR SRN and risk class, which are missing from the detail endpoint. The **UDI-DI detail** (level 2) provides the rich product-specific data (clinical sizes, substances, market info, etc.). The **Basic UDI-DI** (level 3) provides the MDR mandatory boolean fields (implantable, active, measuring function, multi-component type, tissue, etc.) which live at the device family level and are not returned by the UDI-DI detail endpoint.
+
+The `--full-detail` mode of `download_devices` chains all three levels: listing download, per-UUID detail download to `json/`, and Basic UDI-DI download to `/tmp/basic_udi_cache/`. The [eudamed2firstbase](https://github.com/zdavatz/eudamed2firstbase) converter merges all three sources into GS1 firstbase JSON.
+
 ## API
 
 Base URL: `https://ec.europa.eu/tools/eudamed/api/`
